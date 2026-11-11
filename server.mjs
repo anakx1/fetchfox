@@ -563,9 +563,12 @@ async function jobAction(id, action) {
     else if (action === 'cancel') await rpc('aria2.remove', [id]);
     else if (action === 'remove') await rpc('aria2.removeDownloadResult', [id]);
     else if (action === 'retry') {
-      const [st] = await rpc('aria2.tellStatus', [id, ['files']]);
-      const uri = st?.files?.[0]?.uri;
-      if (!uri) return { ok: false, error: 'no source URL to retry' };
+      // tellStatus resolves to an object; source URLs live on files[].uris[]
+      const st = await rpc('aria2.tellStatus', [id, ['files', 'bittorrent', 'status']]);
+      const uri = (st?.files || []).map((f) => f.uris?.[0]?.uri).find(Boolean);
+      if (!uri) {
+        return { ok: false, error: 'no retryable URL for this job (magnet/torrent) — add it again' };
+      }
       await rpc('aria2.removeDownloadResult', [id]).catch(() => {});
       return addJob(uri, { forceAria2: true });
     } else return { ok: false, error: 'unknown action' };
