@@ -672,6 +672,22 @@ function isInsideDir(p, dir) {
   }
 }
 
+/** Recursively total the size of a directory (multi-file torrents). */
+async function dirSize(dir) {
+  let total = 0;
+  const entries = await fsp.readdir(dir, { withFileTypes: true }).catch(() => []);
+  for (const e of entries) {
+    const fp = path.join(dir, e.name);
+    if (e.isDirectory()) {
+      total += await dirSize(fp);
+    } else {
+      const st = await fsp.stat(fp).catch(() => null);
+      if (st) total += st.size;
+    }
+  }
+  return total;
+}
+
 function safeName(n) {
   const b = path.basename(String(n || ''));
   if (!b || b.includes('\0')) return null;
@@ -889,12 +905,19 @@ async function route(req, res) {
 
   if (p === '/api/files' && req.method === 'GET') {
     try {
-      const names = await fsp.readdir(DL);
+      const entries = await fsp.readdir(DL, { withFileTypes: true });
       const out = [];
-      for (const n of names) {
+      for (const e of entries) {
+        const n = e.name;
         if (n.endsWith('.aria2') || n.endsWith('.part')) continue;
-        const s = await fsp.stat(path.join(DL, n)).catch(() => null);
-        if (s && s.isFile()) out.push({ name: n, size: s.size, mtime: s.mtimeMs });
+        const full = path.join(DL, n);
+        const st = await fsp.stat(full).catch(() => null);
+        if (!st) continue;
+        if (st.isDirectory()) {
+          out.push({ name: n, size: await dirSize(full), mtime: st.mtimeMs, dir: true });
+        } else if (st.isFile()) {
+          out.push({ name: n, size: st.size, mtime: st.mtimeMs, dir: false });
+        }
       }
       out.sort((a, b) => b.mtime - a.mtime);
       return json(res, 200, { dir: DL, files: out });
@@ -907,8 +930,15 @@ async function route(req, res) {
     const name = u.searchParams.get('name') || (await readBody(req).catch(() => ({}))).name;
     const fp = safeName(name);
     if (!fp) return json(res, 400, { error: 'bad name' });
+    // safeName() already forces a direct child; assert it for directories
+    if (path.dirname(fp) !== path.resolve(DL)) return json(res, 403, { error: 'outside download dir' });
     try {
-      await fsp.unlink(fp);
+      const st = await fsp.stat(fp).catch(() => null);
+      if (st && st.isDirectory()) {
+        await fsp.rm(fp, { recursive: true, force: true });
+      } else {
+        await fsp.unlink(fp);
+      }
       await fsp.unlink(fp + '.aria2').catch(() => {});
       return json(res, 200, { ok: true });
     } catch (e) {

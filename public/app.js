@@ -381,9 +381,11 @@ function renderFiles() {
       filesEls.set(f.name, el);
     }
     el.querySelector('.jname').textContent = f.name;
+    el.querySelector('.jkind').textContent = f.dir ? 'FOLDER' : 'FILE';
+    el.querySelector('[data-fact="play"]').classList.toggle('hidden', !!f.dir);
     const d = new Date(f.mtime);
     el.querySelector('.jmeta').innerHTML =
-      `${fmtBytes(f.size)} · ${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+      `${fmtBytes(f.size)}${f.dir ? ' · folder' : ''} · ${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
     listEl.appendChild(el);
   }
   for (const [n, el] of filesEls) {
