@@ -54,12 +54,21 @@ fullscreen, with its own icon and no address bar.
 
 ## Where files go
 
+Defaults to:
+
 ```
 ~/storage/shared/Downloads/Fetchfox     (same as /sdcard/Downloads/Fetchfox)
 ```
 
-Files are visible to the Files app, Gallery, VLC, etc. Change the `dir=` line in
-`fetchfox.conf` and restart to move it somewhere else.
+Two ways to change it:
+
+- edit `dir=` in `fetchfox.conf` and restart — the effective location is always
+  whatever aria2 reports at startup, so yt-dlp, the file browser and delete all
+  follow it;
+- `FETCHFOX_DIR=/sdcard/Movies/fetchfox ./start.sh` — sets the location for this
+  run and rewrites the `dir=` line so aria2 and yt-dlp cannot disagree.
+
+Files are visible to the Files app, Gallery, VLC, etc.
 
 ## Keeping downloads alive
 
@@ -91,10 +100,11 @@ scripts/make-icons.mjs  regenerates the PWA icons (fox mark, no dependencies)
 start.sh / stop.sh      launchers
 fetchfox.conf           engine config — generated on first run, editable
 fetchfox.session        saved queue for resume-after-restart
+fetchfox.secret         random RPC token, chmod 600
 fetchfox.log            runtime log
 ```
 
-`fetchfox.conf`, `fetchfox.session` and `*.log` are gitignored — the config is
+`fetchfox.conf`, `fetchfox.session`, `fetchfox.secret` and `*.log` are gitignored — the config is
 created on first run with paths correct for wherever you cloned it.
 
 ## Termux:Widget

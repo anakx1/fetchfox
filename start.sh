@@ -19,8 +19,9 @@ else
 fi
 
 if curl -s -m 1 "http://127.0.0.1:${PORT}/api/state" >/dev/null 2>&1; then
+  DIR_NOTE=$(grep -o 'saving to .*' fetchfox.log 2>/dev/null | tail -n 1 | sed 's/^saving to //')
   echo "  Fetchfox running  ->  http://127.0.0.1:${PORT}"
-  echo "  downloads     ->  ~/storage/shared/Downloads/Fetchfox"
+  echo "  downloads     ->  ${DIR_NOTE:-$HOME/storage/shared/Downloads/Fetchfox}"
   case "${1:-}" in
     open|--open|-o) termux-open-url "http://127.0.0.1:${PORT}" ;;
   esac

@@ -19,7 +19,10 @@ import crypto from 'node:crypto';
 
 const BASE = path.dirname(fileURLToPath(import.meta.url));
 const HOME = os.homedir();
-const DL = path.join(HOME, 'storage/shared/Downloads/Fetchfox');
+const ENV_DIR = process.env.FETCHFOX_DIR ? path.resolve(process.env.FETCHFOX_DIR) : null;
+const DEFAULT_DL = ENV_DIR || path.join(HOME, 'storage/shared/Downloads/Fetchfox');
+// effective directory; replaced with aria2's `dir` once the engine is up
+let DL = DEFAULT_DL;
 const PUBLIC = path.join(BASE, 'public');
 const SESSION = path.join(BASE, 'fetchfox.session');
 const CONF = path.join(BASE, 'fetchfox.conf');
@@ -50,7 +53,7 @@ const RPC_URL = `http://127.0.0.1:${RPC_PORT}/jsonrpc`;
 /* ------------------------------------------------------------------ engine */
 
 const CONF_BODY = `# Fetchfox download engine (aria2) — edit freely, restart to apply
-dir=${DL}
+dir=${DEFAULT_DL}
 enable-rpc=true
 rpc-listen-all=false
 rpc-listen-port=${RPC_PORT}
@@ -94,7 +97,7 @@ log-level=warn
 let aria2Proc = null;
 
 function ensureConf() {
-  fs.mkdirSync(DL, { recursive: true });
+  fs.mkdirSync(DEFAULT_DL, { recursive: true });
 
   if (!fs.existsSync(CONF)) {
     fs.writeFileSync(CONF, CONF_BODY);
@@ -103,6 +106,11 @@ function ensureConf() {
     const before = fs.readFileSync(CONF, 'utf8');
     let body = before;
     body = body.replace(/^rpc-allow-origin-all=.*(?:\r?\n)?/gm, '');
+    if (ENV_DIR) {
+      body = /^dir=.*$/m.test(body)
+        ? body.replace(/^dir=.*$/m, `dir=${ENV_DIR}`)
+        : body + `\ndir=${ENV_DIR}\n`;
+    }
     if (/^rpc-secret=.*$/m.test(body)) {
       body = body.replace(/^rpc-secret=.*$/m, `rpc-secret=${SECRET}`);
     } else {
@@ -570,7 +578,7 @@ async function addJob(url, opts = {}) {
   }
 
   try {
-    const gid = await rpc('aria2.addUri', [[clean], { dir: DL }]);
+    const gid = await rpc('aria2.addUri', [[clean]]);
     return { ok: true, id: gid, kind: 'aria2', url: clean };
   } catch (e) {
     return { ok: false, error: String(e.message || e), url: clean };
@@ -844,9 +852,13 @@ async function main() {
 
   try {
     const opt = await rpc('aria2.getGlobalOption', [], 4000);
+    if (opt.dir) {
+      try { DL = path.resolve(decodeURIComponent(opt.dir)); } catch { DL = path.resolve(opt.dir); }
+    }
     limits.down = Number(opt['max-overall-download-limit'] || 0);
     limits.up = Number(opt['max-overall-upload-limit'] || 0);
   } catch {}
+  fs.mkdirSync(DL, { recursive: true });
 
   const server = http.createServer((req, res) => {
     route(req, res).catch((e) => {
