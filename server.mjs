@@ -587,7 +587,6 @@ async function buildState() {
   for (const j of ytJobs.values()) jobs.push(ytJobView(j));
   jobs.sort((a, b) => (ORDER[a.status] ?? 6) - (ORDER[b.status] ?? 6));
 
-  const engineDown = jobs.filter((j) => j.status === 'active');
   return {
     ok: alive,
     engine: alive ? 'up' : 'down',
@@ -648,13 +647,25 @@ function json(res, code, obj) {
   res.end(b);
 }
 
+class HttpError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+
 async function readBody(req) {
   let b = '';
   for await (const c of req) {
     b += c;
-    if (b.length > 1e6) throw new Error('body too large');
+    if (b.length > 1e6) throw new HttpError(413, 'body too large');
   }
-  return b ? JSON.parse(b) : {};
+  if (!b) return {};
+  try {
+    return JSON.parse(b);
+  } catch {
+    throw new HttpError(400, 'invalid json');
+  }
 }
 
 /**
@@ -787,6 +798,7 @@ async function jobAction(id, action) {
 /* -------------------------------------------------------------------- server */
 
 const sse = new Set();
+const JOB_ACTIONS = new Set(['pause', 'resume', 'cancel', 'remove', 'retry']);
 
 /**
  * Localhost-only guard. Returns an error string when the request must be
@@ -872,12 +884,21 @@ async function route(req, res) {
 
   if (p === '/api/job' && req.method === 'POST') {
     const { id, action } = await readBody(req);
-    if (!id || !action) return json(res, 400, { error: 'id and action required' });
-    return json(res, 200, await jobAction(String(id), String(action)));
+    if (!id || typeof action !== 'string' || !JOB_ACTIONS.has(action)) {
+      return json(res, 400, { error: 'id and a valid action are required' });
+    }
+    return json(res, 200, await jobAction(String(id), action));
   }
 
   if (p === '/api/limit' && req.method === 'POST') {
     const { down, up } = await readBody(req);
+    for (const value of [down, up]) {
+      if (value === undefined || value === null) continue;
+      const n = Number(value);
+      if (!Number.isFinite(n) || n < 0) {
+        return json(res, 400, { error: 'limit must be a finite non-negative number' });
+      }
+    }
     try {
       const num = (v) => (Number(v) > 0 ? String(Math.round(Number(v))) : '0');
       if (down !== undefined && down !== null) {
@@ -1059,8 +1080,11 @@ async function main() {
 
   const server = http.createServer((req, res) => {
     route(req, res).catch((e) => {
-      console.error('[fetchfox]', e);
-      try { json(res, 500, { error: String(e.message || e) }); } catch {}
+      const status = e instanceof HttpError ? e.status : 500;
+      if (status === 500) console.error('[fetchfox]', e);
+      try {
+        json(res, status, { error: status === 500 ? String(e.message || e) : e.message });
+      } catch {}
     });
   });
 
