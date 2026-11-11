@@ -543,7 +543,38 @@ async function jobAction(id, action) {
 
 const sse = new Set();
 
+/**
+ * Localhost-only guard. Returns an error string when the request must be
+ * refused, or null when it may proceed.
+ */
+function guardRequest({ method, host, origin, contentType }, port) {
+  const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
+  const h = String(host || '').toLowerCase();
+  if (!allowedHosts.has(h)) return 'unexpected Host header';
+
+  if (method === 'POST' || method === 'DELETE') {
+    if (origin != null && origin !== '') {
+      const allowedOrigins = new Set([`http://127.0.0.1:${port}`, `http://localhost:${port}`]);
+      if (!allowedOrigins.has(String(origin).toLowerCase())) return 'unexpected Origin header';
+    }
+  }
+
+  if (method === 'POST') {
+    const ct = String(contentType || '').toLowerCase();
+    if (!ct.startsWith('application/json')) return 'Content-Type must be application/json';
+  }
+  return null;
+}
+
 async function route(req, res) {
+  const denied = guardRequest({
+    method: req.method,
+    host: req.headers.host,
+    origin: req.headers.origin,
+    contentType: req.headers['content-type'],
+  }, PORT);
+  if (denied) return json(res, 403, { error: denied });
+
   const u = new URL(req.url, `http://127.0.0.1:${PORT}`);
   const p = decodeURIComponent(u.pathname);
 
