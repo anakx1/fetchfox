@@ -16,6 +16,9 @@ import os from 'node:os';
 import { spawn, execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
+import {
+  fmtBytes, isMedia, safeName, parseRange, guardRequest, parseYtProgress,
+} from './lib/core.mjs';
 
 const BASE = path.dirname(fileURLToPath(import.meta.url));
 const HOME = os.homedir();
@@ -275,14 +278,6 @@ function loadYtState() {
   }
 }
 
-function unit(s) {
-  const n = parseFloat(s);
-  return Number.isFinite(n) ? n : 0;
-}
-
-const MULT = { B: 1, KIB: 1024, MIB: 1024 ** 2, GIB: 1024 ** 3, KB: 1000, MB: 1000 ** 2, GB: 1000 ** 3 };
-const bytes = (v, u) => Math.round(unit(v) * (MULT[String(u || 'B').toUpperCase()] || 1));
-
 function createYtJob(url, opts = {}) {
   const id = `yt${++ytSeq}-${Date.now().toString(36)}`;
   const job = {
@@ -362,42 +357,29 @@ function launchYtProc(job) {
   const handle = (chunk) => {
     const text = String(chunk);
     for (const line of text.split(/\r?\n|\r/)) {
-      const l = line.trim();
-      if (!l) continue;
-      let m;
-      if ((m = l.match(/^\[download\]\s+Destination:\s+(.+)$/)) ||
-          (m = l.match(/^\[Merger\]\s+Merging formats into "(.+)"$/))) {
-        job.path = m[1].trim().replace(/^"|"$/g, '');
-        job.name = path.basename(job.path);
-        continue;
-      }
-      if ((m = l.match(/^\[download\]\s+([\d.]+)%\s+of\s+~?\s*([\d.]+)\s*([KMGT]?i?B)\s+at\s+([\d.]+|Unknown)\s*([KMGT]?i?B)?\/s(?:\s+ETA\s+(\S+))?/i))) {
-        job.percent = parseFloat(m[1]);
-        const total = bytes(m[2], m[3]);
-        if (total > 0) job.size = total;
+      const ev = parseYtProgress(line);
+      if (!ev) continue;
+      if (ev.kind === 'destination') {
+        job.path = ev.path;
+        job.name = path.basename(ev.path);
+      } else if (ev.kind === 'progress') {
+        job.percent = ev.percent;
+        if (ev.size > 0) job.size = ev.size;
         job.done = Math.round((job.percent / 100) * job.size);
-        job.speed = /unknown/i.test(m[4]) ? 0 : bytes(m[4], m[5] || m[3]);
-        job.eta = m[6] && m[6] !== 'Unknown' ? m[6] : '';
+        job.speed = ev.speed;
+        job.eta = ev.eta;
         if (job.percent >= 100) {
           job.done = job.size;
           job.speed = 0;
         }
-        continue;
-      }
-      if ((m = l.match(/^\[download\]\s+([\d.]+)%\s+of\s+~?\s*([\d.]+)\s*([KMGT]?i?B)/i))) {
-        job.percent = parseFloat(m[1]);
-        const total = bytes(m[2], m[3]);
-        if (total > 0) job.size = total;
-        job.done = Math.round((job.percent / 100) * job.size);
-        continue;
-      }
-      if (l.includes('has already been downloaded')) {
+      } else if (ev.kind === 'complete') {
         job.percent = 100;
         job.done = job.size;
-        continue;
+      } else if (ev.kind === 'error') {
+        job.error = ev.message;
+      } else if (ev.kind === 'processing') {
+        job.status = 'processing';
       }
-      if (/ERROR:/.test(l)) job.error = l.replace(/^.*ERROR:\s*/, '');
-      if (/^\[download\]\s+100%/.test(l)) job.status = 'processing';
     }
   };
   proc.stdout.on('data', handle);
@@ -434,17 +416,6 @@ function launchYtProc(job) {
 const notified = new Set();
 let primed = false;
 
-function fmtBytes(n) {
-  if (!n) return '0 B';
-  const u = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let i = 0;
-  let v = n;
-  while (v >= 1024 && i < u.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  return `${v.toFixed(v >= 100 || i === 0 ? 0 : 1)} ${u[i]}`;
-}
 
 function notify(title, content) {
   execFile('termux-notification', [
@@ -621,22 +592,7 @@ const MIME = {
   '.pdf': 'application/pdf',
 };
 
-const MEDIA_HOSTS = [
-  'youtube.com', 'youtu.be', 'music.youtube.com', 'instagram.com', 'tiktok.com',
-  'twitter.com', 'x.com', 'facebook.com', 'fb.watch', 'vimeo.com', 'reddit.com',
-  'redd.it', 'soundcloud.com', 'twitch.tv', 'dailymotion.com', 'bilibili.com',
-  'pinterest.com', 'snapchat.com', 'threads.net', 'rumble.com', 'odysee.com',
-];
 
-function isMedia(url) {
-  try {
-    const u = new URL(url);
-    const host = u.hostname.replace(/^www\./, '').toLowerCase();
-    if (MEDIA_HOSTS.some((h) => host === h || host.endsWith('.' + h))) return true;
-    if (/\.(m3u8|mpd|ism)(\?|$)/i.test(u.pathname)) return true;
-  } catch {}
-  return false;
-}
 
 function json(res, code, obj) {
   const b = JSON.stringify(obj);
@@ -699,13 +655,7 @@ async function dirSize(dir) {
   return total;
 }
 
-function safeName(n) {
-  const b = path.basename(String(n || ''));
-  if (!b || b.includes('\0')) return null;
-  const p = path.join(DL, b);
-  if (!p.startsWith(DL + path.sep) && p !== DL) return null;
-  return p;
-}
+
 
 /* ------------------------------------------------------------------ actions */
 
@@ -800,28 +750,7 @@ async function jobAction(id, action) {
 const sse = new Set();
 const JOB_ACTIONS = new Set(['pause', 'resume', 'cancel', 'remove', 'retry']);
 
-/**
- * Localhost-only guard. Returns an error string when the request must be
- * refused, or null when it may proceed.
- */
-function guardRequest({ method, host, origin, contentType }, port) {
-  const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
-  const h = String(host || '').toLowerCase();
-  if (!allowedHosts.has(h)) return 'unexpected Host header';
 
-  if (method === 'POST' || method === 'DELETE') {
-    if (origin != null && origin !== '') {
-      const allowedOrigins = new Set([`http://127.0.0.1:${port}`, `http://localhost:${port}`]);
-      if (!allowedOrigins.has(String(origin).toLowerCase())) return 'unexpected Origin header';
-    }
-  }
-
-  if (method === 'POST') {
-    const ct = String(contentType || '').toLowerCase();
-    if (!ct.startsWith('application/json')) return 'Content-Type must be application/json';
-  }
-  return null;
-}
 
 async function route(req, res) {
   const denied = guardRequest({
@@ -845,7 +774,7 @@ async function route(req, res) {
 
   // ---- media file streaming (range-aware)
   if (req.method === 'GET' && p.startsWith('/f/')) {
-    const fp = safeName(p.slice(3));
+    const fp = safeName(p.slice(3), DL);
     if (!fp) return json(res, 400, { error: 'bad name' });
     return streamFile(req, res, fp);
   }
@@ -949,7 +878,7 @@ async function route(req, res) {
 
   if (p === '/api/file' && (req.method === 'DELETE' || req.method === 'POST')) {
     const name = u.searchParams.get('name') || (await readBody(req).catch(() => ({}))).name;
-    const fp = safeName(name);
+    const fp = safeName(name, DL);
     if (!fp) return json(res, 400, { error: 'bad name' });
     // safeName() already forces a direct child; assert it for directories
     if (path.dirname(fp) !== path.resolve(DL)) return json(res, 403, { error: 'outside download dir' });
@@ -970,7 +899,7 @@ async function route(req, res) {
   if (p === '/api/open' && req.method === 'POST') {
     // only a bare filename is accepted; any `target` field is ignored
     const { name } = await readBody(req);
-    const fp = safeName(name);
+    const fp = safeName(name, DL);
     if (!fp) return json(res, 400, { error: 'bad name' });
     try {
       await fsp.access(fp, fs.constants.R_OK);
@@ -999,30 +928,7 @@ function sendFile(res, fp) {
   });
 }
 
-/**
- * Parse a single-range `bytes=` header.
- * Returns { start, end }, null when the header is absent/unsupported, or
- * 'invalid' when it cannot be satisfied (caller replies 416).
- */
-function parseRange(header, size) {
-  const m = /^bytes=(\d*)-(\d*)$/i.exec(String(header).trim());
-  if (!m) return 'invalid';
-  const [, rawStart, rawEnd] = m;
-  if (rawStart === '' && rawEnd === '') return 'invalid';
 
-  if (rawStart === '') {
-    // suffix form: bytes=-500 -> last 500 bytes
-    const suffix = parseInt(rawEnd, 10);
-    if (!Number.isFinite(suffix) || suffix <= 0) return 'invalid';
-    return { start: Math.max(0, size - suffix), end: size - 1 };
-  }
-
-  const start = parseInt(rawStart, 10);
-  const end = rawEnd === '' ? size - 1 : parseInt(rawEnd, 10);
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return 'invalid';
-  if (start > end || start >= size) return 'invalid';
-  return { start, end: Math.min(end, size - 1) };
-}
 
 function streamFile(req, res, fp) {
   fs.stat(fp, (err, st) => {

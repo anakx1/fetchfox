@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node server.mjs",
     "stop": "bash stop.sh",
-    "icons": "node scripts/make-icons.mjs"
+    "icons": "node scripts/make-icons.mjs",
+    "test": "node --test"
   },
   "engines": {
     "node": ">=20"

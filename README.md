@@ -95,8 +95,10 @@ Without step 2, Android may freeze the transfer when the screen is off.
 
 ```
 server.mjs              backend: aria2 RPC bridge, yt-dlp jobs, file server
+lib/core.mjs            pure helpers (paths, ranges, guard, yt-dlp progress)
 public/                 UI — index.html, app.js, style.css, sw.js, icons
 scripts/make-icons.mjs  regenerates the PWA icons (fox mark, no dependencies)
+tests/                  node:test suite for lib/core.mjs
 start.sh / stop.sh      launchers
 fetchfox.conf           engine config — generated on first run, editable
 fetchfox.session        saved queue for resume-after-restart
@@ -108,6 +110,17 @@ fetchfox.log            runtime log
 `fetchfox.conf`, `fetchfox.session`, `fetchfox.secret`, `fetchfox.ytjobs.json` and
 `*.log` are gitignored — the config is
 created on first run with paths correct for wherever you cloned it.
+
+## Tests
+
+```bash
+npm test        # node --test — no dependencies, no aria2 needed
+```
+
+Pure helpers live in `lib/core.mjs` so they can be exercised without starting
+the engine or opening a port: yt-dlp progress parsing, media-host detection,
+filename traversal guards, byte formatting, Range parsing and the localhost
+Host/Origin guard. GitHub Actions runs the same suite on Node 20.
 
 ## Termux:Widget
 
