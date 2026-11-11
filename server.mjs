@@ -337,8 +337,8 @@ function notify(title, content) {
 }
 
 function mediaScan(p) {
-  if (!p || !p.startsWith('/storage/')) return;
-  execFile('termux-media-scan', ['-v', p], () => {});
+  if (!p || !isInsideDir(p, DL)) return;
+  execFile('termux-media-scan', ['-v', path.resolve(p)], () => {});
 }
 
 function hash(s) {
@@ -525,6 +525,21 @@ async function readBody(req) {
     if (b.length > 1e6) throw new Error('body too large');
   }
   return b ? JSON.parse(b) : {};
+}
+
+/**
+ * True when `p` lives inside `dir`. Symlinks are resolved on both sides so
+ * Termux paths and real /storage paths compare correctly.
+ */
+function isInsideDir(p, dir) {
+  try {
+    const realDir = fs.realpathSync(dir);
+    const realParent = fs.realpathSync(path.dirname(p));
+    const abs = path.join(realParent, path.basename(p));
+    return abs === realDir || abs.startsWith(realDir + path.sep);
+  } catch {
+    return false;
+  }
 }
 
 function safeName(n) {
