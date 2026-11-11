@@ -721,6 +721,12 @@ function ytAction(job, action) {
     }
   } else if (action === 'remove') {
     ytJobs.delete(job.id);
+  } else if (action === 'retry') {
+    // drop the failed entry and re-queue it with the stored url/opts
+    const fresh = createYtJob(job.url, job.opts || {});
+    ytJobs.delete(job.id);
+    saveYtState();
+    return { ok: true, id: fresh.id, kind: 'ytdlp' };
   }
   saveYtState();
   pumpYtQueue();
