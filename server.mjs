@@ -300,14 +300,9 @@ function startYtJob(url, opts = {}) {
       job.status = 'complete';
       job.percent = 100;
       job.done = job.size || job.done;
-      if (job.path) {
-        mediaScan(job.path);
-        notify('Download finished', `${job.name}\n${fmtBytes(job.size)}`);
-      }
     } else {
       job.status = 'error';
       if (!job.error) job.error = `yt-dlp exited with code ${code}`;
-      notify('Download failed', job.name);
     }
   });
 
@@ -317,7 +312,6 @@ function startYtJob(url, opts = {}) {
 /* ------------------------------------------------------------- side effects */
 
 const notified = new Set();
-const scanned = new Set();
 let primed = false;
 
 function fmtBytes(n) {
@@ -351,6 +345,52 @@ function hash(s) {
   let h = 0;
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
   return h;
+}
+
+/**
+ * Runs whether or not a browser is open, so notifications and media scanning
+ * happen even when the UI is closed. Jobs already finished at startup are
+ * swallowed by the `primed` pass.
+ */
+async function processCompletions() {
+  const done = [];
+
+  try {
+    if (await engineUp()) {
+      const stopped = await rpc('aria2.tellStopped',
+        [0, 200, ['gid', 'status', 'totalLength', 'files', 'bittorrent']], 5000);
+      for (const j of stopped) {
+        if (j.status !== 'complete') continue;
+        const f = (j.files && j.files[0]) || {};
+        done.push({
+          id: j.gid,
+          name: j.bittorrent?.info?.name ||
+            (f.path ? path.basename(decodeURIComponent(f.path)) : 'unknown'),
+          size: Number(j.totalLength || 0),
+          path: f.path ? decodeURIComponent(f.path) : '',
+        });
+      }
+    }
+  } catch {}
+
+  for (const j of ytJobs.values()) {
+    if (j.status === 'complete') {
+      done.push({ id: j.id, name: j.name, size: j.size, path: j.path });
+    }
+  }
+
+  if (!primed) {
+    for (const d of done) notified.add(d.id);
+    primed = true;
+    return;
+  }
+
+  for (const d of done) {
+    if (notified.has(d.id)) continue;
+    notified.add(d.id);
+    notify('Download finished', `${d.name}\n${fmtBytes(d.size)}`);
+    mediaScan(d.path);
+  }
 }
 
 /* ------------------------------------------------------------------- state */
@@ -422,20 +462,6 @@ async function buildState() {
       stopped: Number(g.numStopped || 0),
     };
     jobs = [...active, ...waiting, ...stopped].map(ariaJob);
-  }
-
-  // completion side effects: notifications + media scanner
-  const done = jobs.filter((j) => j.status === 'complete');
-  if (!primed) {
-    for (const j of done) notified.add(j.id);
-    primed = true;
-  } else {
-    for (const j of done) {
-      if (notified.has(j.id)) continue;
-      notified.add(j.id);
-      notify('Download finished', `${j.name}\n${fmtBytes(j.size)}`);
-      mediaScan(j.path);
-    }
   }
 
   for (const j of ytJobs.values()) jobs.push(ytJobView(j));
@@ -813,6 +839,10 @@ async function main() {
       try { json(res, 500, { error: String(e.message || e) }); } catch {}
     });
   });
+
+  setInterval(() => {
+    processCompletions().catch(() => {});
+  }, 2000);
 
   setInterval(async () => {
     if (!sse.size) return;
