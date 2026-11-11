@@ -101,10 +101,12 @@ start.sh / stop.sh      launchers
 fetchfox.conf           engine config — generated on first run, editable
 fetchfox.session        saved queue for resume-after-restart
 fetchfox.secret         random RPC token, chmod 600
+fetchfox.ytjobs.json    remembered yt-dlp jobs (survives restarts)
 fetchfox.log            runtime log
 ```
 
-`fetchfox.conf`, `fetchfox.session`, `fetchfox.secret` and `*.log` are gitignored — the config is
+`fetchfox.conf`, `fetchfox.session`, `fetchfox.secret`, `fetchfox.ytjobs.json` and
+`*.log` are gitignored — the config is
 created on first run with paths correct for wherever you cloned it.
 
 ## Termux:Widget

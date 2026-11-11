@@ -13,3 +13,4 @@ node_modules/
 
 # RPC secret generated on first run
 fetchfox.secret
+fetchfox.ytjobs.json

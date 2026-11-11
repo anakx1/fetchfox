@@ -194,6 +194,86 @@ async function startEngine() {
 const ytJobs = new Map();
 let ytSeq = 0;
 const MAX_YT_CONCURRENT = Number(process.env.MAX_YT_CONCURRENT || 2);
+const YT_STATE = path.join(BASE, 'fetchfox.ytjobs.json');
+let ytSaveTimer = null;
+
+/** Write job metadata now (used on exit and after debounce). */
+function flushYtState() {
+  if (ytSaveTimer) {
+    clearTimeout(ytSaveTimer);
+    ytSaveTimer = null;
+  }
+  const data = [...ytJobs.values()].map((j) => ({
+    id: j.id,
+    url: j.url,
+    opts: j.opts,
+    status: j.status,
+    path: j.path,
+    name: j.name,
+  }));
+  try {
+    fs.writeFileSync(YT_STATE, JSON.stringify(data, null, 2));
+  } catch {}
+}
+
+function saveYtState() {
+  if (ytSaveTimer) return;
+  ytSaveTimer = setTimeout(flushYtState, 400);
+}
+
+/** Restore metadata; anything that was running is marked interrupted. */
+function loadYtState() {
+  let data;
+  try {
+    data = JSON.parse(fs.readFileSync(YT_STATE, 'utf8'));
+  } catch {
+    return;
+  }
+  if (!Array.isArray(data)) return;
+
+  for (const r of data) {
+    if (!r || typeof r.id !== 'string' || typeof r.url !== 'string') continue;
+    const m = /^yt(\d+)-/.exec(r.id);
+    if (m) ytSeq = Math.max(ytSeq, Number(m[1]));
+
+    const job = {
+      id: r.id,
+      kind: 'ytdlp',
+      name: typeof r.name === 'string' && r.name ? r.name : r.url,
+      url: r.url,
+      opts: { playlist: !!r.opts?.playlist, format: r.opts?.format || '' },
+      size: 0,
+      done: 0,
+      speed: 0,
+      up: 0,
+      conns: 0,
+      status: 'error',
+      error: 'interrupted by restart — retry to resume',
+      path: typeof r.path === 'string' ? r.path : '',
+      eta: '',
+      percent: 0,
+      started: Date.now(),
+      proc: null,
+      cancelled: false,
+    };
+
+    if (r.status === 'complete') {
+      job.status = 'complete';
+      job.percent = 100;
+      job.error = null;
+    } else if (r.status === 'waiting') {
+      job.status = 'waiting';
+      job.error = null;
+    } else if (r.status === 'paused') {
+      job.status = 'paused';
+      job.error = null;
+    } else if (r.status === 'cancelled') {
+      job.status = 'cancelled';
+      job.error = null;
+    }
+    ytJobs.set(job.id, job);
+  }
+}
 
 function unit(s) {
   const n = parseFloat(s);
@@ -226,6 +306,7 @@ function createYtJob(url, opts = {}) {
     cancelled: false,
   };
   ytJobs.set(id, job);
+  saveYtState();
   pumpYtQueue();
   return job;
 }
@@ -265,6 +346,7 @@ function launchYtProc(job) {
   job.status = 'active';
   job.error = null;
   job.cancelled = false;
+  saveYtState();
 
   let proc;
   try {
@@ -325,6 +407,7 @@ function launchYtProc(job) {
     job.status = 'error';
     job.error = e.code === 'ENOENT' ? 'yt-dlp not installed (pkg install yt-dlp)' : String(e.message || e);
     job.proc = null;
+    saveYtState();
     pumpYtQueue();
   });
 
@@ -341,6 +424,7 @@ function launchYtProc(job) {
       job.status = 'error';
       if (!job.error) job.error = `yt-dlp exited with code ${code}`;
     }
+    saveYtState();
     pumpYtQueue();
   });
 }
@@ -638,6 +722,7 @@ function ytAction(job, action) {
   } else if (action === 'remove') {
     ytJobs.delete(job.id);
   }
+  saveYtState();
   pumpYtQueue();
   return { ok: true };
 }
@@ -899,6 +984,7 @@ async function main() {
     limits.up = Number(opt['max-overall-upload-limit'] || 0);
   } catch {}
   fs.mkdirSync(DL, { recursive: true });
+  console.log(`[fetchfox] download dir ${DL}`);
 
   const server = http.createServer((req, res) => {
     route(req, res).catch((e) => {
@@ -924,7 +1010,11 @@ async function main() {
     console.log(`[fetchfox] saving to ${DL}`);
   });
 
+  loadYtState();
+  pumpYtQueue();
+
   const shutdown = () => {
+    flushYtState();
     try { aria2Proc?.kill('SIGTERM'); } catch {}
     process.exit(0);
   };
