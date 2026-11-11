@@ -1,0 +1,23 @@
+{
+  "name": "fetchfox",
+  "version": "1.0.0",
+  "description": "A download manager for Termux in the spirit of 1DM/FDM — aria2 engine, yt-dlp media support, local PWA UI.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node server.mjs",
+    "stop": "bash stop.sh",
+    "icons": "node scripts/make-icons.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "termux",
+    "android",
+    "download-manager",
+    "aria2",
+    "yt-dlp",
+    "pwa"
+  ]
+}

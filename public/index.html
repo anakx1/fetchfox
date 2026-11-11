@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d0a08">
+<title>Fetchfox — Download Manager</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="brand">
+    <span class="logo" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="21" height="21" fill="currentColor" aria-hidden="true">
+        <polygon points="2.4,10.1 21.6,10.1 12,22.6"/>
+        <polygon points="2.4,10.6 5.8,2 11.2,10.6"/>
+        <polygon points="21.6,10.6 18.2,2 12.8,10.6"/>
+      </svg>
+    </span>
+    <div>
+      <h1>Fetchfox</h1>
+      <p class="sub"><span id="dot" class="dot"></span><span id="engineText">connecting…</span></p>
+    </div>
+  </div>
+  <div class="stats">
+    <div class="stat"><b id="downSpeed">0 B/s</b><span>down</span></div>
+    <div class="stat"><b id="activeCount">0</b><span>active</span></div>
+  </div>
+</header>
+
+<main>
+  <section class="addbox">
+    <textarea id="urls" rows="1" placeholder="Paste a link — file, video, torrent, magnet…" spellcheck="false" autocomplete="off"></textarea>
+    <div class="addrow">
+      <button id="pasteBtn" class="ghost" title="Read phone clipboard">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>
+        Paste
+      </button>
+      <button id="optsBtn" class="ghost" title="Options">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/><circle cx="17" cy="17" r="2"/><circle cx="8" cy="7" r="2"/></svg>
+        Options
+      </button>
+      <button id="addBtn" class="primary">Download</button>
+    </div>
+    <div id="options" class="options hidden">
+      <label class="check"><input type="checkbox" id="forceYtdlp"> Always use yt-dlp <span class="hint">(media sites)</span></label>
+      <label class="check"><input type="checkbox" id="playlist"> Allow whole playlist</label>
+      <label class="field">
+        <span>Format</span>
+        <input id="format" placeholder="best (default)" spellcheck="false">
+      </label>
+    </div>
+  </section>
+
+  <section class="limitbar">
+    <span class="label">Speed limit</span>
+    <div class="chips" id="limitChips">
+      <button data-bps="0" class="chip on">Unlimited</button>
+      <button data-bps="524288" class="chip">512 KB/s</button>
+      <button data-bps="1048576" class="chip">1 MB/s</button>
+      <button data-bps="2097152" class="chip">2 MB/s</button>
+      <button data-bps="5242880" class="chip">5 MB/s</button>
+    </div>
+  </section>
+
+  <nav class="tabs">
+    <button data-tab="active" class="tab on">Active <span id="tabActive" class="badge">0</span></button>
+    <button data-tab="finished" class="tab">Finished <span id="tabFinished" class="badge">0</span></button>
+    <button data-tab="files" class="tab">Files</button>
+  </nav>
+
+  <div id="list" class="list"></div>
+  <div id="empty" class="empty">Nothing here yet.<br><span>Paste a link above to start a download.</span></div>
+
+  <div class="foot">
+    <span id="dirText">~/storage/shared/Downloads/Fetchfox</span>
+    <button id="installBtn" class="link hidden">Install app</button>
+  </div>
+</main>
+
+<div id="toast" class="toast"></div>
+
+<script src="/app.js"></script>
+</body>
+</html>

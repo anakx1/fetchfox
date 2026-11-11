@@ -1,0 +1,12 @@
+# generated at runtime (contains local absolute paths + rpc secret)
+fetchfox.conf
+fetchfox.session
+
+# logs and partial data
+*.log
+*.aria2
+*.part
+*.torrent
+
+node_modules/
+.DS_Store
