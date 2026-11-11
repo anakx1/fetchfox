@@ -10,3 +10,6 @@ fetchfox.session
 
 node_modules/
 .DS_Store
+
+# RPC secret generated on first run
+fetchfox.secret

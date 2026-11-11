@@ -15,6 +15,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawn, execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import crypto from 'node:crypto';
 
 const BASE = path.dirname(fileURLToPath(import.meta.url));
 const HOME = os.homedir();
@@ -24,7 +25,26 @@ const SESSION = path.join(BASE, 'fetchfox.session');
 const CONF = path.join(BASE, 'fetchfox.conf');
 const PORT = Number(process.env.PORT || 8080);
 const RPC_PORT = Number(process.env.RPC_PORT || 6800);
-const SECRET = process.env.ARIA2_SECRET || 'fetchfox-local';
+const SECRET_FILE = path.join(BASE, 'fetchfox.secret');
+
+/**
+ * RPC secret: env override, else the persisted 32-byte hex token, else a
+ * freshly generated one. Stored 0600 so other apps cannot read it.
+ */
+function loadSecret() {
+  if (process.env.ARIA2_SECRET) return process.env.ARIA2_SECRET;
+  try {
+    const saved = fs.readFileSync(SECRET_FILE, 'utf8').trim();
+    if (/^[0-9a-f]{32,}$/i.test(saved)) return saved;
+  } catch {}
+  const secret = crypto.randomBytes(32).toString('hex');
+  fs.writeFileSync(SECRET_FILE, secret + '\n', { mode: 0o600 });
+  try { fs.chmodSync(SECRET_FILE, 0o600); } catch {}
+  console.log('[fetchfox] generated a new RPC secret in', path.basename(SECRET_FILE));
+  return secret;
+}
+
+const SECRET = loadSecret();
 const RPC_URL = `http://127.0.0.1:${RPC_PORT}/jsonrpc`;
 
 /* ------------------------------------------------------------------ engine */
@@ -35,7 +55,6 @@ enable-rpc=true
 rpc-listen-all=false
 rpc-listen-port=${RPC_PORT}
 rpc-secret=${SECRET}
-rpc-allow-origin-all=true
 
 max-concurrent-downloads=3
 max-connection-per-server=16
@@ -74,9 +93,27 @@ log-level=warn
 
 let aria2Proc = null;
 
-function writeConf() {
-  // only generate on first run so hand edits survive a restart
-  if (!fs.existsSync(CONF)) fs.writeFileSync(CONF, CONF_BODY);
+function ensureConf() {
+  fs.mkdirSync(DL, { recursive: true });
+
+  if (!fs.existsSync(CONF)) {
+    fs.writeFileSync(CONF, CONF_BODY);
+  } else {
+    // migrate configs written by older installs: no CORS, current secret
+    const before = fs.readFileSync(CONF, 'utf8');
+    let body = before;
+    body = body.replace(/^rpc-allow-origin-all=.*(?:\r?\n)?/gm, '');
+    if (/^rpc-secret=.*$/m.test(body)) {
+      body = body.replace(/^rpc-secret=.*$/m, `rpc-secret=${SECRET}`);
+    } else {
+      body += `\nrpc-secret=${SECRET}\n`;
+    }
+    if (body !== before) {
+      fs.writeFileSync(CONF, body);
+      console.log('[fetchfox] updated fetchfox.conf (dropped CORS, refreshed secret)');
+    }
+  }
+
   if (!fs.existsSync(SESSION)) fs.writeFileSync(SESSION, '');
 }
 
@@ -113,8 +150,7 @@ async function engineUp() {
 }
 
 async function startEngine() {
-  writeConf();
-  fs.mkdirSync(DL, { recursive: true });
+  ensureConf();
 
   if (await engineUp()) {
     console.log('[fetchfox] reusing already-running aria2');
