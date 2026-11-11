@@ -193,6 +193,7 @@ async function startEngine() {
 
 const ytJobs = new Map();
 let ytSeq = 0;
+const MAX_YT_CONCURRENT = Number(process.env.MAX_YT_CONCURRENT || 2);
 
 function unit(s) {
   const n = parseFloat(s);
@@ -202,8 +203,50 @@ function unit(s) {
 const MULT = { B: 1, KIB: 1024, MIB: 1024 ** 2, GIB: 1024 ** 3, KB: 1000, MB: 1000 ** 2, GB: 1000 ** 3 };
 const bytes = (v, u) => Math.round(unit(v) * (MULT[String(u || 'B').toUpperCase()] || 1));
 
-function startYtJob(url, opts = {}) {
+function createYtJob(url, opts = {}) {
   const id = `yt${++ytSeq}-${Date.now().toString(36)}`;
+  const job = {
+    id,
+    kind: 'ytdlp',
+    name: url,
+    url,
+    opts: { playlist: !!opts.playlist, format: opts.format || '' },
+    size: 0,
+    done: 0,
+    speed: 0,
+    up: 0,
+    conns: 0,
+    status: 'waiting',
+    error: null,
+    path: '',
+    eta: '',
+    percent: 0,
+    started: Date.now(),
+    proc: null,
+    cancelled: false,
+  };
+  ytJobs.set(id, job);
+  pumpYtQueue();
+  return job;
+}
+
+/** Start queued yt-dlp jobs while there are free slots. */
+function pumpYtQueue() {
+  const running = [...ytJobs.values()]
+    .filter((j) => j.status === 'active' || j.status === 'processing').length;
+  let slots = MAX_YT_CONCURRENT - running;
+  if (slots <= 0) return;
+
+  for (const job of ytJobs.values()) {
+    if (slots <= 0) break;
+    if (job.status === 'waiting' && !job.proc) {
+      launchYtProc(job);
+      slots--;
+    }
+  }
+}
+
+function launchYtProc(job) {
   const args = [
     '--newline',
     '--no-colors',
@@ -214,30 +257,14 @@ function startYtJob(url, opts = {}) {
     '--retries', '5',
     '--fragment-retries', '10',
   ];
-  if (!opts.playlist) args.push('--no-playlist');
-  if (opts.format) args.push('-f', opts.format);
-  args.push('--', url);
+  if (!job.opts.playlist) args.push('--no-playlist');
+  if (job.opts.format) args.push('-f', job.opts.format);
+  if (limits.down > 0) args.push('--limit-rate', `${Math.round(limits.down)}B`);
+  args.push('--', job.url);
 
-  const job = {
-    id,
-    kind: 'ytdlp',
-    name: url,
-    url,
-    size: 0,
-    done: 0,
-    speed: 0,
-    up: 0,
-    conns: 0,
-    status: 'active',
-    error: null,
-    path: '',
-    eta: '',
-    percent: 0,
-    started: Date.now(),
-    proc: null,
-    cancelled: false,
-  };
-  ytJobs.set(id, job);
+  job.status = 'active';
+  job.error = null;
+  job.cancelled = false;
 
   let proc;
   try {
@@ -245,7 +272,8 @@ function startYtJob(url, opts = {}) {
   } catch (e) {
     job.status = 'error';
     job.error = String(e.message || e);
-    return job;
+    pumpYtQueue();
+    return;
   }
   job.proc = proc;
 
@@ -297,6 +325,7 @@ function startYtJob(url, opts = {}) {
     job.status = 'error';
     job.error = e.code === 'ENOENT' ? 'yt-dlp not installed (pkg install yt-dlp)' : String(e.message || e);
     job.proc = null;
+    pumpYtQueue();
   });
 
   proc.on('close', (code) => {
@@ -312,9 +341,8 @@ function startYtJob(url, opts = {}) {
       job.status = 'error';
       if (!job.error) job.error = `yt-dlp exited with code ${code}`;
     }
+    pumpYtQueue();
   });
-
-  return job;
 }
 
 /* ------------------------------------------------------------- side effects */
@@ -573,7 +601,7 @@ async function addJob(url, opts = {}) {
         : isMedia(clean);
 
   if (useYtdlp) {
-    const j = startYtJob(clean, opts);
+    const j = createYtJob(clean, opts);
     return { ok: true, id: j.id, kind: 'ytdlp', url: clean };
   }
 
@@ -585,26 +613,38 @@ async function addJob(url, opts = {}) {
   }
 }
 
+function ytAction(job, action) {
+  if (action === 'cancel') {
+    job.cancelled = true;
+    job.speed = 0;
+    if (job.proc) {
+      try { job.proc.kill('SIGCONT'); } catch {}
+      try { job.proc.kill('SIGTERM'); } catch {}
+    }
+    if (job.status !== 'complete') job.status = 'cancelled';
+  } else if (action === 'pause') {
+    if (job.proc) { try { job.proc.kill('SIGSTOP'); } catch {} }
+    if (job.status === 'waiting' || job.status === 'active' || job.status === 'processing') {
+      job.status = 'paused';
+      job.speed = 0;
+    }
+  } else if (action === 'resume') {
+    if (job.proc) {
+      try { job.proc.kill('SIGCONT'); } catch {}
+      job.status = 'active';
+    } else if (job.status === 'paused') {
+      job.status = 'waiting';
+    }
+  } else if (action === 'remove') {
+    ytJobs.delete(job.id);
+  }
+  pumpYtQueue();
+  return { ok: true };
+}
+
 async function jobAction(id, action) {
   const yt = ytJobs.get(id);
-  if (yt) {
-    if (action === 'cancel') {
-      yt.cancelled = true;
-      if (yt.proc) {
-        try { yt.proc.kill('SIGCONT'); } catch {}
-        try { yt.proc.kill('SIGTERM'); } catch {}
-      } else if (yt.status !== 'complete') {
-        yt.status = 'cancelled';
-      }
-    } else if (action === 'pause') {
-      if (yt.proc) { try { yt.proc.kill('SIGSTOP'); } catch {} yt.status = 'paused'; }
-    } else if (action === 'resume') {
-      if (yt.proc) { try { yt.proc.kill('SIGCONT'); } catch {} yt.status = 'active'; }
-    } else if (action === 'remove') {
-      ytJobs.delete(id);
-    }
-    return { ok: true };
-  }
+  if (yt) return ytAction(yt, action);
 
   try {
     if (action === 'pause') await rpc('aria2.pause', [id]);
