@@ -327,7 +327,7 @@ listEl.addEventListener('click', async (e) => {
   const act = btn.dataset.act;
 
   if (act === 'open') {
-    await api('/api/open', { method: 'POST', body: JSON.stringify({ target: job.path, name: job.name }) });
+    await api('/api/open', { method: 'POST', body: JSON.stringify({ name: job.name }) });
     return;
   }
   if (act === 'delete') {

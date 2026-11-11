@@ -724,10 +724,16 @@ async function route(req, res) {
   }
 
   if (p === '/api/open' && req.method === 'POST') {
-    const { name, target } = await readBody(req);
-    const file = target || (name ? path.join(DL, path.basename(name)) : '');
-    if (!file) return json(res, 400, { error: 'nothing to open' });
-    execFile('termux-open', [file], () => {});
+    // only a bare filename is accepted; any `target` field is ignored
+    const { name } = await readBody(req);
+    const fp = safeName(name);
+    if (!fp) return json(res, 400, { error: 'bad name' });
+    try {
+      await fsp.access(fp, fs.constants.R_OK);
+    } catch {
+      return json(res, 404, { error: 'not found' });
+    }
+    execFile('termux-open', [fp], () => {});
     return json(res, 200, { ok: true });
   }
 
