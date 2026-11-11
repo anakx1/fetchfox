@@ -403,6 +403,10 @@ listEl.addEventListener('click', async (e) => {
     if (r.ok) { toast('Deleted'); loadFiles(); } else toast(r.error || 'Failed', true);
     return;
   }
+  if (fact === 'play') {
+    window.open('/f/' + encodeURIComponent(name), '_blank');
+    return;
+  }
   await api('/api/open', { method: 'POST', body: JSON.stringify({ name }) });
 });
 

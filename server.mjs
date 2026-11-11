@@ -610,6 +610,16 @@ const MIME = {
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon',
   '.webp': 'image/webp',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.mp4': 'video/mp4',
+  '.mkv': 'video/x-matroska',
+  '.webm': 'video/webm',
+  '.mp3': 'audio/mpeg',
+  '.m4a': 'audio/mp4',
+  '.ogg': 'audio/ogg',
+  '.pdf': 'application/pdf',
 };
 
 const MEDIA_HOSTS = [
@@ -938,6 +948,31 @@ function sendFile(res, fp) {
   });
 }
 
+/**
+ * Parse a single-range `bytes=` header.
+ * Returns { start, end }, null when the header is absent/unsupported, or
+ * 'invalid' when it cannot be satisfied (caller replies 416).
+ */
+function parseRange(header, size) {
+  const m = /^bytes=(\d*)-(\d*)$/i.exec(String(header).trim());
+  if (!m) return 'invalid';
+  const [, rawStart, rawEnd] = m;
+  if (rawStart === '' && rawEnd === '') return 'invalid';
+
+  if (rawStart === '') {
+    // suffix form: bytes=-500 -> last 500 bytes
+    const suffix = parseInt(rawEnd, 10);
+    if (!Number.isFinite(suffix) || suffix <= 0) return 'invalid';
+    return { start: Math.max(0, size - suffix), end: size - 1 };
+  }
+
+  const start = parseInt(rawStart, 10);
+  const end = rawEnd === '' ? size - 1 : parseInt(rawEnd, 10);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return 'invalid';
+  if (start > end || start >= size) return 'invalid';
+  return { start, end: Math.min(end, size - 1) };
+}
+
 function streamFile(req, res, fp) {
   fs.stat(fp, (err, st) => {
     if (err || !st.isFile()) {
@@ -947,22 +982,22 @@ function streamFile(req, res, fp) {
     const type = MIME[path.extname(fp).toLowerCase()] || 'application/octet-stream';
     const range = req.headers.range;
     if (range) {
-      const m = /bytes=(\d*)-(\d*)/.exec(range);
-      if (m) {
-        let start = m[1] ? parseInt(m[1], 10) : 0;
-        let end = m[2] ? parseInt(m[2], 10) : st.size - 1;
-        if (isNaN(start) || isNaN(end) || start > end || start >= st.size) {
-          res.writeHead(416, { 'content-range': `bytes */${st.size}` });
-          return res.end();
-        }
-        end = Math.min(end, st.size - 1);
-        res.writeHead(206, {
-          'content-type': type,
-          'content-length': end - start + 1,
-          'content-range': `bytes ${start}-${end}/${st.size}`,
+      const parsed = parseRange(range, st.size);
+      if (parsed === 'invalid') {
+        res.writeHead(416, {
+          'content-range': `bytes */${st.size}`,
           'accept-ranges': 'bytes',
         });
-        return fs.createReadStream(fp, { start, end }).pipe(res);
+        return res.end();
+      }
+      if (parsed) {
+        res.writeHead(206, {
+          'content-type': type,
+          'content-length': parsed.end - parsed.start + 1,
+          'content-range': `bytes ${parsed.start}-${parsed.end}/${st.size}`,
+          'accept-ranges': 'bytes',
+        });
+        return fs.createReadStream(fp, parsed).pipe(res);
       }
     }
     res.writeHead(200, {
