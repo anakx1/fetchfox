@@ -41,7 +41,7 @@ fullscreen, with its own icon and no address bar.
 | Up to 16 connections per file | ✅ |
 | Pause / resume / cancel | ✅ |
 | Queue (3 at a time, rest wait) | ✅ |
-| Global speed limit | ✅ chips in UI |
+| Global speed limit | ✅ chips in UI, also applies to yt-dlp |
 | Resume after restart | ✅ session file |
 | Torrent + magnet links | ✅ |
 | Video/audio sites via yt-dlp | ✅ auto-detected |
@@ -89,6 +89,10 @@ Without step 2, Android may freeze the transfer when the screen is off.
 - **Cannot replace the browser's downloader.** Same reason.
 - **Pause on yt-dlp jobs** uses `SIGSTOP`, so the remote connection may time out
   and the job may need **Retry**.
+- **Changing the speed limit restarts running yt-dlp jobs.** `--limit-rate` is
+  fixed when a process starts, so a new limit relaunches active yt-dlp jobs and
+  `--continue` resumes the partial file. Paused jobs are left alone — they pick
+  up the new limit when you resume them.
 - Localhost only. Nothing is exposed to the network (`127.0.0.1`).
 
 ## Project layout

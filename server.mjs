@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import {
   fmtBytes, isMedia, safeName, parseRange, guardRequest, parseYtProgress, shortError,
-  ytStartableIds,
+  ytStartableIds, ytRestartIds,
 } from './lib/core.mjs';
 
 const BASE = path.dirname(fileURLToPath(import.meta.url));
@@ -259,6 +259,7 @@ function loadYtState() {
       started: Date.now(),
       proc: null,
       cancelled: false,
+      restarting: false,
     };
 
     if (r.status === 'complete') {
@@ -300,6 +301,8 @@ function createYtJob(url, opts = {}) {
     started: Date.now(),
     proc: null,
     cancelled: false,
+    restarting: false,
+    rateLimit: 0,
   };
   ytJobs.set(id, job);
   saveYtState();
@@ -315,6 +318,24 @@ function pumpYtQueue() {
   for (const id of ytStartableIds(view, MAX_YT_CONCURRENT)) {
     const job = ytJobs.get(id);
     if (job) launchYtProc(job);
+  }
+}
+
+/**
+ * `--limit-rate` is fixed when yt-dlp starts, so relaunch active jobs when the
+ * global limit changes. The close handler re-queues them and pumpYtQueue()
+ * starts them again with --continue.
+ */
+function restartYtJobsForLimit() {
+  const view = [...ytJobs.values()].map((j) => ({
+    id: j.id, status: j.status, hasProc: !!j.proc, restarting: !!j.restarting,
+  }));
+  for (const id of ytRestartIds(view)) {
+    const job = ytJobs.get(id);
+    if (!job || !job.proc) continue;
+    job.restarting = true;
+    job.speed = 0;
+    try { job.proc.kill('SIGTERM'); } catch {}
   }
 }
 
@@ -337,6 +358,7 @@ function launchYtProc(job) {
   job.status = 'active';
   job.error = null;
   job.cancelled = false;
+  job.rateLimit = limits.down;   // what --limit-rate this process was built with
   saveYtState();
 
   let proc;
@@ -394,6 +416,10 @@ function launchYtProc(job) {
     job.speed = 0;
     if (job.cancelled) {
       job.status = 'cancelled';
+    } else if (job.restarting) {
+      job.restarting = false;
+      job.status = 'waiting';
+      job.error = null;
     } else if (code === 0) {
       job.status = 'complete';
       job.percent = 100;
@@ -694,6 +720,7 @@ async function addJob(url, opts = {}) {
 function ytAction(job, action) {
   if (action === 'cancel') {
     job.cancelled = true;
+    job.restarting = false;
     job.speed = 0;
     if (job.proc) {
       try { job.proc.kill('SIGCONT'); } catch {}
@@ -708,8 +735,15 @@ function ytAction(job, action) {
     }
   } else if (action === 'resume') {
     if (job.proc) {
-      try { job.proc.kill('SIGCONT'); } catch {}
-      job.status = 'active';
+      if (job.rateLimit !== limits.down) {
+        // the limit changed while paused; relaunch so --limit-rate matches
+        job.restarting = true;
+        try { job.proc.kill('SIGCONT'); } catch {}
+        try { job.proc.kill('SIGTERM'); } catch {}
+      } else {
+        try { job.proc.kill('SIGCONT'); } catch {}
+        job.status = 'active';
+      }
     } else if (job.status === 'paused') {
       job.status = 'waiting';
     }
@@ -839,7 +873,10 @@ async function route(req, res) {
       const num = (v) => (Number(v) > 0 ? String(Math.round(Number(v))) : '0');
       if (down !== undefined && down !== null) {
         await rpc('aria2.changeGlobalOption', [{ 'max-overall-download-limit': num(down) }]);
-        limits.down = Number(down) > 0 ? Number(down) : 0;
+        const next = Number(down) > 0 ? Number(down) : 0;
+        const changed = next !== limits.down;
+        limits.down = next;
+        if (changed) restartYtJobsForLimit();
       }
       if (up !== undefined && up !== null) {
         await rpc('aria2.changeGlobalOption', [{ 'max-overall-upload-limit': num(up) }]);
