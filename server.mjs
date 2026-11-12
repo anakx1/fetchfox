@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import {
   fmtBytes, isMedia, safeName, parseRange, guardRequest, parseYtProgress, shortError,
+  ytStartableIds,
 } from './lib/core.mjs';
 
 const BASE = path.dirname(fileURLToPath(import.meta.url));
@@ -308,17 +309,12 @@ function createYtJob(url, opts = {}) {
 
 /** Start queued yt-dlp jobs while there are free slots. */
 function pumpYtQueue() {
-  const running = [...ytJobs.values()]
-    .filter((j) => j.status === 'active' || j.status === 'processing').length;
-  let slots = MAX_YT_CONCURRENT - running;
-  if (slots <= 0) return;
-
-  for (const job of ytJobs.values()) {
-    if (slots <= 0) break;
-    if (job.status === 'waiting' && !job.proc) {
-      launchYtProc(job);
-      slots--;
-    }
+  const view = [...ytJobs.values()].map((j) => ({
+    id: j.id, status: j.status, hasProc: !!j.proc,
+  }));
+  for (const id of ytStartableIds(view, MAX_YT_CONCURRENT)) {
+    const job = ytJobs.get(id);
+    if (job) launchYtProc(job);
   }
 }
 
