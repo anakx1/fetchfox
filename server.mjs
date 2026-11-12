@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import {
   fmtBytes, isMedia, safeName, parseRange, guardRequest, parseYtProgress, shortError,
-  ytStartableIds, ytRestartIds, isMetadataOnlyJob, magnetName,
+  ytStartableIds, ytRestartIds, isMetadataOnlyJob, magnetName, safeDecode,
 } from './lib/core.mjs';
 
 const BASE = path.dirname(fileURLToPath(import.meta.url));
@@ -480,9 +480,9 @@ async function processCompletions() {
         done.push({
           id: j.gid,
           name: j.bittorrent?.info?.name ||
-            (f.path ? path.basename(decodeURIComponent(f.path)) : 'unknown'),
+            (f.path ? path.basename(safeDecode(f.path)) : 'unknown'),
           size: Number(j.totalLength || 0),
-          path: f.path ? decodeURIComponent(f.path) : '',
+          path: f.path ? safeDecode(f.path) : '',
         });
       }
     }
@@ -530,7 +530,7 @@ function ariaJob(j) {
   const f = (j.files && j.files[0]) || {};
   const name =
     j.bittorrent?.info?.name ||
-    (f.path ? path.basename(decodeURIComponent(f.path)) : '') ||
+    (f.path ? path.basename(safeDecode(f.path)) : '') ||
     (f.uris && f.uris[0] ? f.uris[0].uri : '') ||
     'unknown';
   const st = j.status === 'active' ? 'active'
@@ -552,7 +552,7 @@ function ariaJob(j) {
     seeders: Number(j.numSeeders || 0),
     status: st,
     error: j.errorMessage || null,
-    path: f.path ? decodeURIComponent(f.path) : '',
+    path: f.path ? safeDecode(f.path) : '',
     eta: '',
     metadataOnly: isMetadataOnlyJob(j),
     follows: j.following || '',
@@ -820,7 +820,12 @@ async function route(req, res) {
   if (denied) return json(res, 403, { error: denied });
 
   const u = new URL(req.url, `http://127.0.0.1:${PORT}`);
-  const p = decodeURIComponent(u.pathname);
+  let p;
+  try {
+    p = decodeURIComponent(u.pathname);
+  } catch {
+    return json(res, 400, { error: 'bad path' });
+  }
 
   // ---- static shell
   if (req.method === 'GET' && (p === '/' || p === '/index.html')) {
@@ -1036,9 +1041,7 @@ async function main() {
 
   try {
     const opt = await rpc('aria2.getGlobalOption', [], 4000);
-    if (opt.dir) {
-      try { DL = path.resolve(decodeURIComponent(opt.dir)); } catch { DL = path.resolve(opt.dir); }
-    }
+    if (opt.dir) DL = path.resolve(safeDecode(opt.dir));
     limits.down = Number(opt['max-overall-download-limit'] || 0);
     limits.up = Number(opt['max-overall-upload-limit'] || 0);
   } catch {}
