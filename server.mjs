@@ -1025,13 +1025,32 @@ async function main() {
   loadYtState();
   pumpYtQueue();
 
-  const shutdown = () => {
+  let shuttingDown = false;
+  const shutdown = (code = 0) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+
+    // stop children first, otherwise a retry after restart duplicates the work
+    for (const job of ytJobs.values()) {
+      if (!job.proc) continue;
+      job.status = 'interrupted';   // persisted as interrupted, never complete
+      job.speed = 0;
+      try { job.proc.kill('SIGCONT'); } catch {}
+      try { job.proc.kill('SIGTERM'); } catch {}
+    }
+
     flushYtState();
     try { aria2Proc?.kill('SIGTERM'); } catch {}
-    process.exit(0);
+    process.exit(code);
   };
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+
+  process.on('SIGINT', () => shutdown(0));
+  process.on('SIGTERM', () => shutdown(0));
+  process.on('SIGHUP', () => shutdown(0));
+  process.on('uncaughtException', (e) => {
+    console.error('[fetchfox] uncaught exception:', e);
+    shutdown(1);
+  });
 }
 
 main().catch((e) => {
