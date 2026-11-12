@@ -17,7 +17,7 @@ import { spawn, execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import {
-  fmtBytes, isMedia, safeName, parseRange, guardRequest, parseYtProgress,
+  fmtBytes, isMedia, safeName, parseRange, guardRequest, parseYtProgress, shortError,
 } from './lib/core.mjs';
 
 const BASE = path.dirname(fileURLToPath(import.meta.url));
@@ -445,6 +445,7 @@ function hash(s) {
  */
 async function processCompletions() {
   const done = [];
+  const failed = [];
 
   try {
     if (await engineUp()) {
@@ -467,11 +468,15 @@ async function processCompletions() {
   for (const j of ytJobs.values()) {
     if (j.status === 'complete') {
       done.push({ id: j.id, name: j.name, size: j.size, path: j.path });
+    } else if (j.status === 'error') {
+      // cancelled jobs are user intent, not failures
+      failed.push({ id: j.id, name: j.name, error: j.error });
     }
   }
 
   if (!primed) {
     for (const d of done) notified.add(d.id);
+    for (const f of failed) notified.add(f.id);
     primed = true;
     return;
   }
@@ -481,6 +486,12 @@ async function processCompletions() {
     notified.add(d.id);
     notify('Download finished', `${d.name}\n${fmtBytes(d.size)}`);
     mediaScan(d.path);
+  }
+
+  for (const f of failed) {
+    if (notified.has(f.id)) continue;
+    notified.add(f.id);
+    notify('Download failed', `${f.name}\n${shortError(f.error)}`);
   }
 }
 
