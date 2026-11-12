@@ -102,7 +102,7 @@ server.mjs              backend: aria2 RPC bridge, yt-dlp jobs, file server
 lib/core.mjs            pure helpers (paths, ranges, guard, yt-dlp progress)
 public/                 UI — index.html, app.js, style.css, sw.js, icons
 scripts/make-icons.mjs  regenerates the PWA icons (fox mark, no dependencies)
-tests/                  node:test suite for lib/core.mjs
+tests/                  node:test unit suite + fake-engine integration test
 start.sh / stop.sh      launchers
 fetchfox.conf           engine config — generated on first run, editable
 fetchfox.session        saved queue for resume-after-restart
@@ -122,9 +122,12 @@ npm test        # node --test — no dependencies, no aria2 needed
 ```
 
 Pure helpers live in `lib/core.mjs` so they can be exercised without starting
-the engine or opening a port: yt-dlp progress parsing, media-host detection,
-filename traversal guards, byte formatting, Range parsing and the localhost
-Host/Origin guard. GitHub Actions runs the same suite on Node 20.
+the engine or opening a port: yt-dlp progress parsing and queue accounting,
+magnet metadata detection, safe decoding, filename traversal guards, byte
+formatting, Range parsing and the localhost Host/Origin guard. One integration
+test boots the real server against a stub aria2 JSON-RPC engine and checks the
+guard, request validation and magnet row handling. GitHub Actions runs the
+suite on Node 20.
 
 ## Termux:Widget
 

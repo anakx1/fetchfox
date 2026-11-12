@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  fmtBytes, isMedia, safeName, parseRange, guardRequest, parseYtProgress,
+  fmtBytes, isMedia, safeName, parseRange, guardRequest, parseYtProgress, shortError,
+  safeDecode, isMetadataOnlyJob, magnetName, ytStartableIds, ytRestartIds,
 } from '../lib/core.mjs';
 
 const DL = '/data/data/com.termux/files/home/storage/shared/Downloads/Fetchfox';
@@ -20,6 +21,15 @@ test('fmtBytes formats byte counts', () => {
   assert.equal(fmtBytes(1024 ** 2), '1.0 MB');
   assert.equal(fmtBytes(1024 ** 3), '1.0 GB');
   assert.equal(fmtBytes(1024 ** 4), '1.0 TB');
+});
+
+test('shortError flattens and clips failure messages', () => {
+  assert.equal(shortError('  boom\n\n  gone '), 'boom gone');
+  assert.equal(shortError(''), 'download failed');
+  assert.equal(shortError(null), 'download failed');
+  const long = shortError('x'.repeat(300), 20);
+  assert.equal(long.length, 20);
+  assert.ok(long.endsWith('…'));
 });
 
 /* ------------------------------------------------------------------- media */
@@ -68,6 +78,99 @@ test('safeName never escapes the root', () => {
   const root = '/tmp/dl';
   assert.equal(safeName('..%2f..%2fetc', root), `${root}/..%2f..%2fetc`);
   assert.equal(safeName('../file', root), null);
+});
+
+/* -------------------------------------------------------------- safeDecode */
+
+test('safeDecode decodes valid escapes', () => {
+  assert.equal(safeDecode('a%20b'), 'a b');
+  assert.equal(safeDecode('100%25'), '100%');
+  assert.equal(safeDecode('plain'), 'plain');
+  assert.equal(safeDecode(''), '');
+});
+
+test('safeDecode keeps broken escapes verbatim', () => {
+  assert.equal(safeDecode('%E0%A4%A'), '%E0%A4%A');
+  assert.equal(safeDecode('file%ZZ.bin'), 'file%ZZ.bin');
+  assert.equal(safeDecode('ends-with-%'), 'ends-with-%');
+});
+
+test('safeDecode passes non-strings through untouched', () => {
+  assert.equal(safeDecode(undefined), undefined);
+  assert.equal(safeDecode(null), null);
+});
+
+/* ------------------------------------------------------------------ magnet */
+
+test('isMetadataOnlyJob spots aria2 magnet metadata jobs', () => {
+  assert.equal(isMetadataOnlyJob({ followedBy: ['abc'] }), true);
+  assert.equal(isMetadataOnlyJob({ followedBy: ['a', 'b'] }), true);
+});
+
+test('isMetadataOnlyJob tolerates ordinary jobs', () => {
+  assert.equal(isMetadataOnlyJob({}), false);
+  assert.equal(isMetadataOnlyJob({ followedBy: [] }), false);
+  assert.equal(isMetadataOnlyJob({ gid: 'x', status: 'active' }), false);
+  assert.equal(isMetadataOnlyJob(null), false);
+  assert.equal(isMetadataOnlyJob(undefined), false);
+});
+
+test('magnetName extracts the display name', () => {
+  assert.equal(magnetName('magnet:?xt=urn:btih:abc&dn=Cool%20Movie'), 'Cool Movie');
+  assert.equal(magnetName('magnet:?xt=urn:btih:abc&dn=Cool+Movie'), 'Cool Movie');
+  assert.equal(magnetName('magnet:?xt=urn:btih:abc'), '');
+  assert.equal(magnetName(''), '');
+  assert.equal(magnetName(null), '');
+});
+
+/* ------------------------------------------------------------------- queue */
+
+const q = (id, status, hasProc) => ({ id, status, hasProc });
+
+test('ytStartableIds fills free slots in order', () => {
+  const jobs = [q('a', 'waiting', false), q('b', 'waiting', false), q('c', 'waiting', false)];
+  assert.deepEqual(ytStartableIds(jobs, 2), ['a', 'b']);
+  assert.deepEqual(ytStartableIds(jobs, 1), ['a']);
+  assert.deepEqual(ytStartableIds(jobs, 0), []);
+  assert.deepEqual(ytStartableIds([], 3), []);
+});
+
+test('ytStartableIds counts any live process, including paused ones', () => {
+  const pausedWithProc = [q('a', 'paused', true), q('b', 'waiting', false)];
+  assert.deepEqual(ytStartableIds(pausedWithProc, 1), []);
+  assert.deepEqual(ytStartableIds(pausedWithProc, 2), ['b']);
+});
+
+test('ytStartableIds ignores jobs paused before they started', () => {
+  const jobs = [q('a', 'paused', false), q('b', 'waiting', false)];
+  assert.deepEqual(ytStartableIds(jobs, 1), ['b']);
+});
+
+test('ytStartableIds never picks running or finished jobs', () => {
+  const jobs = [
+    q('a', 'active', true),
+    q('b', 'processing', true),
+    q('c', 'complete', false),
+    q('d', 'error', false),
+  ];
+  assert.deepEqual(ytStartableIds(jobs, 5), []);
+});
+
+/* ----------------------------------------------------- limit-change restart */
+
+test('ytRestartIds picks active jobs with a live process', () => {
+  const jobs = [q('a', 'active', true), q('b', 'active', false), q('c', 'processing', true)];
+  assert.deepEqual(ytRestartIds(jobs), ['a']);
+});
+
+test('ytRestartIds skips paused, processing and already-restarting jobs', () => {
+  const jobs = [
+    { id: 'a', status: 'paused', hasProc: true },
+    { id: 'b', status: 'processing', hasProc: true },
+    { id: 'c', status: 'active', hasProc: true, restarting: true },
+    { id: 'd', status: 'waiting', hasProc: false },
+  ];
+  assert.deepEqual(ytRestartIds(jobs), []);
 });
 
 /* ------------------------------------------------------------------ ranges */
