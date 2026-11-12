@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import {
   fmtBytes, isMedia, safeName, parseRange, guardRequest, parseYtProgress, shortError,
-  ytStartableIds, ytRestartIds,
+  ytStartableIds, ytRestartIds, isMetadataOnlyJob, magnetName,
 } from './lib/core.mjs';
 
 const BASE = path.dirname(fileURLToPath(import.meta.url));
@@ -472,9 +472,10 @@ async function processCompletions() {
   try {
     if (await engineUp()) {
       const stopped = await rpc('aria2.tellStopped',
-        [0, 200, ['gid', 'status', 'totalLength', 'files', 'bittorrent']], 5000);
+        [0, 200, ['gid', 'status', 'totalLength', 'files', 'bittorrent', 'followedBy']], 5000);
       for (const j of stopped) {
         if (j.status !== 'complete') continue;
+        if (isMetadataOnlyJob(j)) continue;   // wait for the real torrent
         const f = (j.files && j.files[0]) || {};
         done.push({
           id: j.gid,
@@ -521,7 +522,8 @@ async function processCompletions() {
 
 const KEYS = [
   'gid', 'status', 'totalLength', 'completedLength', 'downloadSpeed', 'uploadSpeed',
-  'connections', 'numSeeders', 'errorMessage', 'files', 'bittorrent', 'dir', 'followedBy',
+  'connections', 'numSeeders', 'errorMessage', 'files', 'bittorrent', 'dir',
+  'followedBy', 'following',
 ];
 
 function ariaJob(j) {
@@ -552,6 +554,8 @@ function ariaJob(j) {
     error: j.errorMessage || null,
     path: f.path ? decodeURIComponent(f.path) : '',
     eta: '',
+    metadataOnly: isMetadataOnlyJob(j),
+    follows: j.following || '',
   };
 }
 
@@ -585,7 +589,20 @@ async function buildState() {
       waiting: Number(g.numWaiting || 0),
       stopped: Number(g.numStopped || 0),
     };
-    jobs = [...active, ...waiting, ...stopped].map(ariaJob);
+    const all = [...active, ...waiting, ...stopped].map(ariaJob);
+    const byId = new Map(all.map((j) => [j.id, j]));
+
+    // aria2 resolves a magnet in two jobs: a metadata-only one (hidden) and the
+    // real torrent that follows it. Label the follower from the magnet.
+    jobs = all.filter((j) => !j.metadataOnly);
+    for (const j of jobs) {
+      if (!j.follows) continue;
+      const parent = byId.get(j.follows);
+      if (!parent) continue;
+      if (j.name === 'unknown' || /^magnet:/i.test(j.name)) {
+        j.name = magnetName(parent.name) || magnetName(parent.url) || j.name;
+      }
+    }
   }
 
   for (const j of ytJobs.values()) jobs.push(ytJobView(j));
